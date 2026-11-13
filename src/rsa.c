@@ -28,7 +28,11 @@ static int rsa_init_public_context(mbedtls_rsa_context *rsa, const rsa_key_t *ke
   return mbedtls_rsa_check_pubkey(rsa) < 0 ? -1 : 0;
 }
 
-static int rsa_init_private_context(mbedtls_rsa_context *rsa, const rsa_key_t *key) {
+// validate: derive D and run mbedtls_rsa_check_privkey (import, rsa_check_crt). Signing and decryption skip both
+// (kbauth patch 0005): mbedtls_rsa_private's CRT path needs neither D nor that check, and it verifies every result
+// with the public exponent, so a corrupt stored key still fails instead of producing a faulty output. Saves the
+// 2048-bit modular inverse for D and the full key check: ~3% of an RSA-2048 signature (measured in snape56's emulator).
+static int rsa_init_private_context(mbedtls_rsa_context *rsa, const rsa_key_t *key, int validate) {
   mbedtls_mpi p1, q1, phi;
   int ret = -1;
 
@@ -41,6 +45,16 @@ static int rsa_init_private_context(mbedtls_rsa_context *rsa, const rsa_key_t *k
   // key exactly as imported. Silently recomputing them would "repair" corrupt
   // keys instead of rejecting them. mbedtls_rsa_check_privkey validates
   // DP/DQ/QP against (P, Q, D, E) and fails on an inconsistent key.
+  if (!validate) {
+    if (rsa_init_public_context(rsa, key) < 0 ||
+        mbedtls_mpi_read_binary(&rsa->MBEDTLS_PRIVATE(DP), key->dp, key->nbits / 16) < 0 ||
+        mbedtls_mpi_read_binary(&rsa->MBEDTLS_PRIVATE(DQ), key->dq, key->nbits / 16) < 0 ||
+        mbedtls_mpi_read_binary(&rsa->MBEDTLS_PRIVATE(QP), key->qinv, key->nbits / 16) < 0) {
+      goto cleanup;
+    }
+    ret = 0;
+    goto cleanup;
+  }
   if (rsa_init_public_context(rsa, key) < 0 ||
       mbedtls_mpi_sub_int(&p1, &rsa->MBEDTLS_PRIVATE(P), 1) < 0 ||
       mbedtls_mpi_sub_int(&q1, &rsa->MBEDTLS_PRIVATE(Q), 1) < 0 ||
@@ -143,12 +157,12 @@ cleanup:
   return ret;
 }
 
-__attribute__((weak)) int rsa_private(const rsa_key_t *key, const uint8_t *input, uint8_t *output) {
+static int rsa_private_impl(const rsa_key_t *key, const uint8_t *input, uint8_t *output, int validate) {
   int ret = 0;
 #ifdef USE_MBEDCRYPTO
   mbedtls_rsa_context rsa;
   mbedtls_rsa_init(&rsa);
-  if (rsa_init_private_context(&rsa, key) < 0) {
+  if (rsa_init_private_context(&rsa, key, validate) < 0) {
     ret = -1;
     goto cleanup;
   }
@@ -162,8 +176,13 @@ cleanup:
   (void)key;
   (void)input;
   (void)output;
+  (void)validate;
 #endif
   return ret;
+}
+
+__attribute__((weak)) int rsa_private(const rsa_key_t *key, const uint8_t *input, uint8_t *output) {
+  return rsa_private_impl(key, input, output, 0);
 }
 
 int rsa_sign_pkcs_v15(const rsa_key_t *key, const uint8_t *data, const size_t len, uint8_t *sig) {
@@ -197,7 +216,7 @@ int rsa_check_crt_with_scratch(const rsa_key_t *key, uint8_t *probe, size_t capa
   // rsa_private must verify the CRT result, so inconsistent dp/dq/qinv fail.
   memset(probe, 0, key->nbits / 8);
   probe[key->nbits / 8 - 1] = 2;
-  int result = rsa_private(key, probe, probe);
+  int result = rsa_private_impl(key, probe, probe, 1);
   memzero(probe, key->nbits / 8);
   return result;
 }
