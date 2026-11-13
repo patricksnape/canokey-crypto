@@ -8,7 +8,13 @@ option(USE_MBEDCRYPTO "Use mbed-crypto as the crypto implementation" ON)
 option(TEST_WITH_MBEDCRYPTO "Enable cross-validation tests against mbedtls" ON)
 option(USE_PLATFORM_KECCAK_P1600 "Use a platform-provided Keccak-p1600 implementation" OFF)
 
-if(USE_MBEDCRYPTO OR (ENABLE_CRYPTO_TESTS AND TEST_WITH_MBEDCRYPTO))
+# A host build system may already provide TF-PSA-Crypto (e.g. Zephyr's mbedtls module, with this repo's Ed25519
+# patch applied to it and MBEDTLS_ECP_DP_ED25519_ENABLED set in its configuration): then link that one instead of
+# building a second copy.
+if(TARGET tfpsacrypto)
+    set(CANOKEY_CRYPTO_EXTERNAL_TFPSA ON)
+endif()
+if((USE_MBEDCRYPTO OR (ENABLE_CRYPTO_TESTS AND TEST_WITH_MBEDCRYPTO)) AND NOT CANOKEY_CRYPTO_EXTERNAL_TFPSA)
     find_package(Git REQUIRED)
     set(USE_STATIC_TF_PSA_CRYPTO_LIBRARY ON CACHE BOOL "")
     set(USE_SHARED_TF_PSA_CRYPTO_LIBRARY OFF CACHE BOOL "")
@@ -57,10 +63,17 @@ add_library(canokey-crypto STATIC ${SRC})
 if(USE_MBEDCRYPTO)
     target_compile_definitions(canokey-crypto PUBLIC USE_MBEDCRYPTO)
     target_link_libraries(canokey-crypto tfpsacrypto)
+    if(NOT CANOKEY_CRYPTO_EXTERNAL_TFPSA)
+        target_include_directories(
+            canokey-crypto
+            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tf-psa-crypto/include
+            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include
+        )
+    endif()
+    # ML-DSA / ML-KEM come from mldsa-native / mlkem-native directly (compiled into ml-dsa-65.c / ml-kem-768.c),
+    # not from TF-PSA-Crypto, so they work with an external TF-PSA-Crypto too.
     target_include_directories(
         canokey-crypto
-        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tf-psa-crypto/include
-        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tf-psa-crypto/drivers/pqcp/mldsa-native/mldsa
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mlkem-native/mlkem
     )
