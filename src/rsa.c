@@ -10,7 +10,7 @@
 #include <mbedtls/private/rsa.h>
 #include <sha.h>
 
-// kbauth (patch 0006): the last private key's blinding pair (mbedtls Vi = Vf^-e, Vf), reused by the next private
+// kbauth: the last private key's blinding pair (mbedtls Vi = Vf^-e, Vf), reused by the next private
 // operation with the same key. mbedtls_rsa_private then updates them by squaring (Kocher's scheme, as a long-lived
 // mbedtls context does) instead of drawing a fresh pair: two constant-time modular inverses mod p and q, ~43% of an
 // RSA-2048 signature. Keyed by SHA-256(p || q); cleared when an operation fails. RAM only.
@@ -49,7 +49,7 @@ static int rsa_init_public_context(mbedtls_rsa_context *rsa, const rsa_key_t *ke
 }
 
 // validate: derive D and run mbedtls_rsa_check_privkey (import, rsa_check_crt). Signing and decryption skip both
-// (kbauth patch 0005): mbedtls_rsa_private's CRT path needs neither D nor that check, and it verifies every result
+// (kbauth): mbedtls_rsa_private's CRT path needs neither D nor that check, and it verifies every result
 // with the public exponent, so a corrupt stored key still fails instead of producing a faulty output. Saves the
 // 2048-bit modular inverse for D and the full key check: ~3% of an RSA-2048 signature (measured in snape56's emulator).
 static int rsa_init_private_context(mbedtls_rsa_context *rsa, const rsa_key_t *key, int validate) {
