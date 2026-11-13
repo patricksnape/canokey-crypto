@@ -8,6 +8,11 @@
 
 #define MLK_CONFIG_CUSTOM_ZEROIZE
 #define mlk_zeroize mbedtls_platform_zeroize
+/* The large structures (matrix, vectors, Keccak states; MLK_TOTAL_ALLOC_768_*: 10-14 KB) on the mbedtls heap, as
+ * ML-DSA's: on the stack they overflow a 16 KB thread stack on small devices (kbauth: key generation). */
+#define MLK_CONFIG_CUSTOM_ALLOC_FREE
+#define MLK_CUSTOM_ALLOC(v, T, N) T *v = (T *)mbedtls_calloc((N), sizeof(T))
+#define MLK_CUSTOM_FREE(v, T, N) mbedtls_free(v)
 #define MLK_CONFIG_EXTERNAL_API_QUALIFIER static
 #define MLK_CONFIG_INTERNAL_API_QUALIFIER static
 #define MLK_CONFIG_NAMESPACE_PREFIX canokey_crypto_mlkem768
