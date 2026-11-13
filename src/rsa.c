@@ -8,6 +8,26 @@
 #ifdef USE_MBEDCRYPTO
 #include <mbedtls/private/bignum.h>
 #include <mbedtls/private/rsa.h>
+#include <sha.h>
+
+// kbauth (patch 0006): the last private key's blinding pair (mbedtls Vi = Vf^-e, Vf), reused by the next private
+// operation with the same key. mbedtls_rsa_private then updates them by squaring (Kocher's scheme, as a long-lived
+// mbedtls context does) instead of drawing a fresh pair: two constant-time modular inverses mod p and q, ~43% of an
+// RSA-2048 signature. Keyed by SHA-256(p || q); cleared when an operation fails. RAM only.
+static struct {
+  uint8_t fingerprint[SHA256_DIGEST_LENGTH];
+  uint16_t nbits;
+  uint8_t vi[RSA_N_BIT_MAX / 8];
+  uint8_t vf[RSA_N_BIT_MAX / 8];
+} rsa_blinding_cache;
+
+static void rsa_key_fingerprint(const rsa_key_t *key, uint8_t fp[SHA256_DIGEST_LENGTH]) {
+  sha256_ctx_t ctx;
+  sha256_init(&ctx);
+  sha256_update(&ctx, key->p, key->nbits / 16);
+  sha256_update(&ctx, key->q, key->nbits / 16);
+  sha256_final(&ctx, fp);
+}
 
 static int rsa_export_component(const mbedtls_mpi *value, uint8_t *buf, size_t buf_len) {
   memset(buf, 0, buf_len);
@@ -162,15 +182,38 @@ static int rsa_private_impl(const rsa_key_t *key, const uint8_t *input, uint8_t 
 #ifdef USE_MBEDCRYPTO
   mbedtls_rsa_context rsa;
   mbedtls_rsa_init(&rsa);
+  uint8_t fp[SHA256_DIGEST_LENGTH];
+  const size_t n_len = key->nbits / 8;
   if (rsa_init_private_context(&rsa, key, validate) < 0) {
     ret = -1;
     goto cleanup;
+  }
+  if (!validate) {
+    rsa_key_fingerprint(key, fp);
+    if (rsa_blinding_cache.nbits == key->nbits &&
+        memcmp(rsa_blinding_cache.fingerprint, fp, sizeof(fp)) == 0 &&
+        (mbedtls_mpi_read_binary(&rsa.MBEDTLS_PRIVATE(Vi), rsa_blinding_cache.vi, n_len) < 0 ||
+         mbedtls_mpi_read_binary(&rsa.MBEDTLS_PRIVATE(Vf), rsa_blinding_cache.vf, n_len) < 0)) {
+      ret = -1;
+      goto cleanup;
+    }
   }
   if (mbedtls_rsa_private(&rsa, mbedtls_rnd, NULL, input, output) < 0) {
     ret = -1;
     goto cleanup;
   }
+  if (!validate) {
+    if (rsa_export_component(&rsa.MBEDTLS_PRIVATE(Vi), rsa_blinding_cache.vi, n_len) < 0 ||
+        rsa_export_component(&rsa.MBEDTLS_PRIVATE(Vf), rsa_blinding_cache.vf, n_len) < 0) {
+      ret = -1;
+      goto cleanup;
+    }
+    memcpy(rsa_blinding_cache.fingerprint, fp, sizeof(fp));
+    rsa_blinding_cache.nbits = key->nbits;
+  }
 cleanup:
+  if (ret < 0) memzero(&rsa_blinding_cache, sizeof(rsa_blinding_cache));
+  memzero(fp, sizeof(fp));
   mbedtls_rsa_free(&rsa);
 #else
   (void)key;
