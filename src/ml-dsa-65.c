@@ -3,6 +3,12 @@
 
 #include <string.h>
 
+// kbauth (CONFIG_KBAUTH_MLDSA=n): build the no-mbedtls variants below - every ML-DSA call fails, mldsa-native and
+// its stream cache aren't compiled in.
+#ifdef KBAUTH_NO_MLDSA
+#undef USE_MBEDCRYPTO
+#endif
+
 enum {
   CANOKEY_MLDSA65_SEED_BYTES = MLDSA_SEEDBYTES,
   CANOKEY_MLDSA65_CRH_BYTES = MLDSA_CRHBYTES,
