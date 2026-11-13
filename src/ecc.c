@@ -255,6 +255,26 @@ out:
 }
 #endif
 
+/* kbauth: P-256 on other hardware or code (KBAUTH_P256_HOOKS; kbauth's src/core/p256_cc310.c: the nRF52840's
+ * CryptoCell-310). Each short-Weierstrass function first offers SECP256R1 to its hook; KBAUTH_P256_PASS from a hook
+ * (unavailable, or failed its self-test) falls through to mbedtls here. The other curves always stay on mbedtls. */
+#ifdef KBAUTH_P256_HOOKS
+#define KBAUTH_P256_PASS (-1000)
+int kbauth_p256_generate(ecc_key_t *key);
+int kbauth_p256_complete_key(ecc_key_t *key);
+int kbauth_p256_sign(const ecc_key_t *key, const uint8_t *digest, size_t len, uint8_t *sig);
+int kbauth_p256_ecdh(const uint8_t *priv_key, const uint8_t *receiver_pub_key, uint8_t *out);
+#define KBAUTH_P256(call)                                                                                          \
+  do {                                                                                                              \
+    if (type == SECP256R1) {                                                                                        \
+      int kbauth_r_ = (call);                                                                                       \
+      if (kbauth_r_ != KBAUTH_P256_PASS) return kbauth_r_;                                                          \
+    }                                                                                                               \
+  } while (0)
+#else
+#define KBAUTH_P256(call) do { } while (0)
+#endif
+
 static const K__ed25519_public_key gx = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9};
 
@@ -448,6 +468,7 @@ __attribute__((weak)) int sm2_z(const uint8_t *id, const ecc_key_t *key, uint8_t
 }
 
 __attribute__((weak)) int K__short_weierstrass_generate(key_type_t type, ecc_key_t *key) {
+  KBAUTH_P256(kbauth_p256_generate(key));
 #ifdef USE_MBEDCRYPTO
   if (type == SM2) {
     int res = 0;
@@ -519,6 +540,7 @@ __attribute__((weak)) int K__short_weierstrass_verify_private_key(key_type_t typ
 }
 
 __attribute__((weak)) int K__short_weierstrass_complete_key(key_type_t type, ecc_key_t *key) {
+  KBAUTH_P256(kbauth_p256_complete_key(key));
 #ifdef USE_MBEDCRYPTO
   mbedtls_mpi d;
   mbedtls_ecp_group grp;
@@ -549,6 +571,7 @@ __attribute__((weak)) int K__short_weierstrass_complete_key(key_type_t type, ecc
 
 __attribute__((weak)) int K__short_weierstrass_sign(key_type_t type, const ecc_key_t *key,
                                                     const uint8_t *data_or_digest, size_t len, uint8_t *sig) {
+  KBAUTH_P256(kbauth_p256_sign(key, data_or_digest, len, sig));
 #ifdef USE_MBEDCRYPTO
   if (type == SM2) {
     mbedtls_mpi bn;
@@ -593,6 +616,7 @@ __attribute__((weak)) int K__short_weierstrass_sign(key_type_t type, const ecc_k
 
 __attribute__((weak)) int K__short_weierstrass_ecdh(key_type_t type, const uint8_t *priv_key,
                                                     const uint8_t *receiver_pub_key, uint8_t *out) {
+  KBAUTH_P256(kbauth_p256_ecdh(priv_key, receiver_pub_key, out));
 #ifdef USE_MBEDCRYPTO
   int ret = -1;
   mbedtls_mpi d;
